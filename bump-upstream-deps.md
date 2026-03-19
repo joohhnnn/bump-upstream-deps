@@ -97,10 +97,17 @@ digraph bump_flow {
   "Bump version in root Cargo.toml" -> "Update [patch] rev/branch" [label="if patches exist"];
   "Bump version in root Cargo.toml" -> "cargo check" [label="no patches"];
   "Update [patch] rev/branch" -> "cargo check";
+  "Replace redundant local code" [shape=box];
+  "Clean up unused deps" [shape=box];
+  "cargo fmt + clippy" [shape=box];
+
   "cargo check" -> "Errors?" ;
-  "Errors?" -> "Done" [label="no"];
+  "Errors?" -> "Replace redundant local code" [label="no"];
   "Errors?" -> "Fix breakage from changelog" [label="yes"];
   "Fix breakage from changelog" -> "cargo check";
+  "Replace redundant local code" -> "Clean up unused deps";
+  "Clean up unused deps" -> "cargo fmt + clippy";
+  "cargo fmt + clippy" -> "Done";
 }
 ```
 
@@ -165,13 +172,62 @@ Only use `git checkout -- Cargo.lock` if a previous failed bump left the lockfil
 ### 6. Verify
 
 ```bash
-cargo check
+cargo check --workspace --all-features
 ```
 If errors:
 - Read the error + the changelog you already fetched
 - Common fixes: renamed types (search-replace), removed re-exports (add direct dep), changed trait bounds (update impls), feature flag renames
 
-### 7. Commit
+### 7. Replace redundant local code with upstream exports (IMPORTANT)
+
+After compilation passes, do NOT stop. The new upstream version likely exports types, traits, or helpers that the local codebase was implementing manually. Removing this redundant code is a key part of a clean bump.
+
+**7a. Inspect the upstream crate's public API for new exports:**
+```bash
+# Find the upstream source directory from cargo metadata
+upstream_dir=$(cargo metadata --format-version 1 --no-deps 2>/dev/null | \
+  python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print([p['manifest_path'] for p in pkgs if p['name']=='alloy-evm'][0])" | \
+  xargs dirname)
+
+# Read its lib.rs to see public exports (pub struct, pub trait, pub fn, pub use)
+grep -n 'pub ' "$upstream_dir/src/lib.rs" | head -40
+
+# Or list all pub items across the crate
+grep -rn 'pub \(struct\|trait\|fn\|type\|use\) ' "$upstream_dir/src/" | head -50
+```
+
+**7b. Cross-reference with local implementations:**
+```bash
+# Extract upstream pub type/struct/trait names
+upstream_names=$(grep -roh 'pub \(struct\|trait\|fn\) \w\+' "$upstream_dir/src/" | awk '{print $3}' | sort -u)
+
+# Search for local code with the same names (potential redundancy)
+for name in $upstream_names; do
+  matches=$(grep -rn "struct $name\|trait $name\|fn $name" crates/ --include='*.rs' -l 2>/dev/null)
+  if [ -n "$matches" ]; then
+    echo "  $name -> $matches"
+  fi
+done
+```
+
+Look for:
+- Local structs/traits that now exist upstream (e.g. `MockExecutor`, `NoopBlockExecutor`)
+- Local helper functions that upstream now provides
+- Wrapper types no longer needed because upstream changed the API
+- `// TODO: remove when upstream exports this` comments
+
+**7c. Remove redundant code and switch to upstream imports.** After removing code, also clean up:
+- Member crate `Cargo.toml` files: remove dependencies that are no longer used
+- Re-exports that pointed to now-removed local types
+
+### 8. Format and final check
+
+```bash
+cargo +nightly fmt --all
+cargo +nightly clippy --workspace --all-features
+```
+
+### 9. Commit
 
 ```
 chore(deps): bump alloy-core from X to Y
@@ -189,3 +245,5 @@ Changes: [brief summary from changelog]
 | Bump one family, miss another | e.g. bump alloy but not alloy-core when they released together | Check all families in the matrix |
 | Ignore pre-release channel | `cargo search` shows stable 1.7.3 but repo uses 2.0.0-rc.0 | Use `gh api` for GitHub releases |
 | Major revm bump without alloy-evm | alloy-evm bridges alloy+revm, must be compatible with both | Bump alloy-evm first or simultaneously |
+| Stop after compilation passes | Local code that reimplements upstream functionality remains as dead weight | After `cargo check` passes, compare upstream's new exports against local implementations and remove redundant code |
+| Skip rustfmt | Trait bound changes and new imports cause formatting drift | Always run `cargo +nightly fmt --all` before committing |
