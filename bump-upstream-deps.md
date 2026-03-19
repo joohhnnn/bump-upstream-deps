@@ -171,6 +171,8 @@ When bumping revm, you need to:
 
 ## Common Mistakes
 
+- **Stale `Cargo.lock`**: After a failed bump, `Cargo.lock` retains residual changes. Always `git checkout -- Cargo.lock` before retrying
+- **`[patch]` silent ignore**: If `[dependencies]` says `0.36.1` but `[patch]` pins `0.36.0`, the patch is **silently ignored**, pulling incompatible transitive deps from crates.io. Versions must match exactly
 - Bumping `alloy` but not `alloy-core` (or vice versa) when they released together
 - Not checking pre-release channel when repo uses `rc`/`beta` versions
 - Forgetting `cargo update -p <crate>` to sync `Cargo.lock`
