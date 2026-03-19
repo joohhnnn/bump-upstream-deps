@@ -70,7 +70,7 @@ digraph bump_flow {
   "Read changelog" [shape=box];
   "Is major bump?" [shape=diamond];
   "Bump version in root Cargo.toml" [shape=box];
-  "Reset Cargo.lock first" [shape=box];
+  "Bump Cargo.toml + cargo update -p" [shape=box];
   "Update [patch] rev/branch" [shape=box];
   "cargo check" [shape=box];
   "Errors?" [shape=diamond];
@@ -89,11 +89,11 @@ digraph bump_flow {
   "Check GitHub releases" -> "Read changelog";
   "Read changelog" -> "Is major bump?";
   "Is major bump?" -> "Need coordinated bump?" [label="yes"];
-  "Is major bump?" -> "Reset Cargo.lock first" [label="no (patch/minor)"];
+  "Is major bump?" -> "Bump Cargo.toml + cargo update -p" [label="no (patch/minor)"];
   "Need coordinated bump?" -> "Bump alloy-evm first" [label="revm+alloy"];
-  "Need coordinated bump?" -> "Reset Cargo.lock first" [label="single family"];
-  "Bump alloy-evm first" -> "Reset Cargo.lock first";
-  "Reset Cargo.lock first" -> "Bump version in root Cargo.toml";
+  "Need coordinated bump?" -> "Bump Cargo.toml + cargo update -p" [label="single family"];
+  "Bump alloy-evm first" -> "Bump Cargo.toml + cargo update -p";
+  "Bump Cargo.toml + cargo update -p" -> "Bump version in root Cargo.toml";
   "Bump version in root Cargo.toml" -> "Update [patch] rev/branch" [label="if patches exist"];
   "Bump version in root Cargo.toml" -> "cargo check" [label="no patches"];
   "Update [patch] rev/branch" -> "cargo check";
@@ -139,18 +139,26 @@ gh api repos/alloy-rs/alloy/releases/latest --jq '.body' | head -50
 ```
 Look for: BREAKING, renamed types, changed trait bounds, feature flag renames.
 
-### 5. Reset Cargo.lock, then bump
+### 5. Update Cargo.toml, then sync Cargo.lock
 
-```bash
-git checkout -- Cargo.lock
-```
-Then apply version changes. Use `sed 's/= "OLD"/= "NEW"/g'` — this catches both formats:
+First apply version changes in `Cargo.toml`. Use `sed 's/= "OLD"/= "NEW"/g'` — this catches both formats:
 ```toml
 alloy-dyn-abi = "1.5.2"                                # simple
 alloy-primitives = { version = "1.5.2", features = [] } # inline table
 ```
 
-### 6. Verify
+### 6. Sync Cargo.lock precisely
+
+Do NOT `git checkout -- Cargo.lock` — that resets all transitive deps and introduces unrelated changes. Instead, update only the target crates:
+
+```bash
+cargo update -p alloy-primitives -p alloy-sol-types  # for alloy-core bump
+cargo update -p revm -p alloy-evm                     # for revm bump
+```
+
+If a previous failed bump polluted `Cargo.lock`, THEN reset it: `git checkout -- Cargo.lock`
+
+### 7. Verify
 
 ```bash
 cargo check
@@ -172,7 +180,7 @@ Changes: [brief summary from changelog]
 
 | Pitfall | What happens | Fix |
 |---------|-------------|-----|
-| Stale `Cargo.lock` | Previous failed bump pollutes next attempt | `git checkout -- Cargo.lock` before retrying |
+| Blanket `Cargo.lock` reset | `git checkout -- Cargo.lock` re-resolves ALL transitive deps, introducing unrelated changes | Use `cargo update -p <crate>` to update only target crates. Only reset Cargo.lock if a previous failed bump polluted it |
 | `[patch]` version mismatch | Patch silently ignored, crates.io version used, incompatible transitive deps pulled in | Ensure `[dependencies]` and `[patch]` versions match exactly |
 | Bump one family, miss another | e.g. bump alloy but not alloy-core when they released together | Check all families in the matrix |
 | Ignore pre-release channel | `cargo search` shows stable 1.7.3 but repo uses 2.0.0-rc.0 | Use `gh api` for GitHub releases |
