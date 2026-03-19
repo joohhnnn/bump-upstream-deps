@@ -8,24 +8,27 @@ When upstream libraries like `alloy`, `revm`, or `alloy-core` release new versio
 
 ## Dependency Graph
 
+Dependencies are cross-cutting, not linear:
+
 ```
-alloy-core (alloy-primitives, alloy-sol-types, alloy-rlp, alloy-dyn-abi)
-  │
-alloy (alloy-consensus, alloy-eips, alloy-provider, alloy-rpc-types, ...)
-  │
-revm ←── depends on alloy-core + some alloy crates
-  │
-alloy-evm ←── BRIDGES alloy + revm (critical middle layer)
-  │
-  ├── reth (paradigmxyz/reth)
-  ├── foundry (foundry-rs/foundry)
-  │
-  └── Extensions:
-        op-alloy / op-revm (OP Stack)
-        tempo-primitives / tempo-alloy (Tempo)
+            alloy-core (primitives, sol-types, rlp, dyn-abi)
+           ╱    │     ╲
+        alloy   │    revm ←── uses alloy-core AND some alloy crates
+           ╲    │     ╱
+          alloy-evm (bridges alloy + revm)
+           ╱       ╲
+        reth      foundry
 ```
 
-**Key insight**: `alloy-evm` bridges alloy and revm. When either side bumps a major version, `alloy-evm` must be updated first, then downstream repos can follow.
+| Project | alloy-core | alloy | revm | alloy-evm |
+|---------|-----------|-------|------|-----------|
+| alloy | ✓ | — | ✗ | ✗ |
+| revm | ✓ | ✓ partial | — | ✗ |
+| alloy-evm | ✓ | ✓ | ✓ | — |
+| reth | ✓ | ✓ | ✓ | ✓ |
+| foundry | ✓ | ✓ | ✓ | ✓ |
+
+**Key insight**: revm directly uses alloy crates (consensus, eips, provider), not just alloy-core. An alloy major bump can break revm too. `alloy-evm` bridges both sides and must update before downstream repos can follow.
 
 ## Validated Results
 

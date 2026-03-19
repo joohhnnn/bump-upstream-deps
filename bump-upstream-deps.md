@@ -9,21 +9,29 @@ Automatically detect and apply upstream dependency updates across Ethereum Rust 
 
 ## Dependency Graph
 
+Dependencies are cross-cutting, not linear:
+
 ```
-alloy-core (alloy-primitives, alloy-sol-types, alloy-rlp, alloy-dyn-abi)
-  │
-alloy (alloy-consensus, alloy-eips, alloy-provider, alloy-rpc-types, ~30 sub-crates)
-  │
-revm ←── depends on alloy-core + some alloy crates
-  │
-alloy-evm ←── BRIDGES alloy + revm (critical middle layer)
-  │
-  ├── reth (paradigmxyz/reth)
-  ├── foundry (foundry-rs/foundry)
-  └── op-alloy / op-revm (OP Stack extensions)
+            alloy-core (primitives, sol-types, rlp, dyn-abi)
+           ╱    │     ╲
+        alloy   │    revm ←── uses alloy-core AND some alloy crates
+           ╲    │     ╱
+          alloy-evm (bridges alloy + revm)
+           ╱       ╲
+        reth      foundry
 ```
 
-**Key**: `alloy-evm` bridges alloy and revm. When either side bumps a major version, `alloy-evm` must update first, then downstream repos follow.
+Who depends on what:
+
+| Project | alloy-core | alloy | revm | alloy-evm |
+|---------|-----------|-------|------|-----------|
+| alloy | ✓ | — | ✗ | ✗ |
+| revm | ✓ | ✓ partial | — | ✗ |
+| alloy-evm | ✓ | ✓ | ✓ | — |
+| reth | ✓ | ✓ | ✓ | ✓ |
+| foundry | ✓ | ✓ | ✓ | ✓ |
+
+**Key**: revm directly uses alloy crates (consensus, eips, provider), not just alloy-core. This means an alloy major bump can break revm too. Always check the full matrix before bumping.
 
 ## Step 0: Understand the Target Repo's Dep Structure
 
