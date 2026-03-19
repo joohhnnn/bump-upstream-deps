@@ -139,7 +139,7 @@ gh api repos/alloy-rs/alloy/releases/latest --jq '.body' | head -50
 ```
 Look for: BREAKING, renamed types, changed trait bounds, feature flag renames.
 
-### 5. Update Cargo.toml, then sync Cargo.lock
+### 5. Bump versions and update lockfile
 
 First apply version changes in `Cargo.toml`. Use `sed 's/= "OLD"/= "NEW"/g'` — this catches both formats:
 ```toml
@@ -147,18 +147,22 @@ alloy-dyn-abi = "1.5.2"                                # simple
 alloy-primitives = { version = "1.5.2", features = [] } # inline table
 ```
 
-### 6. Sync Cargo.lock precisely
-
-Do NOT `git checkout -- Cargo.lock` — that resets all transitive deps and introduces unrelated changes. Instead, update only the target crates:
+Then update `Cargo.lock` precisely — do NOT `git checkout -- Cargo.lock`, that resets all transitive deps and introduces unrelated changes (windows-sys, syn, socket2, etc.):
 
 ```bash
-cargo update -p alloy-primitives -p alloy-sol-types  # for alloy-core bump
-cargo update -p revm -p alloy-evm                     # for revm bump
+# For alloy-core bump
+cargo update -p alloy-primitives -p alloy-sol-types -p alloy-dyn-abi -p alloy-json-abi
+
+# For revm bump
+cargo update -p revm -p revm-database -p revm-interpreter -p revm-database-interface -p revm-inspectors -p alloy-evm
+
+# For alloy bump
+cargo update -p alloy-consensus -p alloy-eips -p alloy-network -p alloy-provider -p alloy-rpc-types
 ```
 
-If a previous failed bump polluted `Cargo.lock`, THEN reset it: `git checkout -- Cargo.lock`
+Only use `git checkout -- Cargo.lock` if a previous failed bump left the lockfile in a dirty state.
 
-### 7. Verify
+### 6. Verify
 
 ```bash
 cargo check
