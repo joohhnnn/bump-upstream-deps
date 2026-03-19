@@ -1,27 +1,39 @@
 ---
 name: bump-upstream-deps
-description: Use when an upstream Rust crate (alloy, revm, alloy-core) releases a new version and downstream repos (reth, foundry) need to adopt the update. Also use when asked to check for outdated dependencies across Ethereum Rust ecosystem repos.
+description: Use when asked to bump, update, or upgrade alloy, revm, alloy-core, or alloy-evm in an Ethereum Rust repo (reth, foundry). Also use when checking for outdated Cargo dependencies in these projects.
 ---
 
 # Bump Upstream Dependencies
 
-Automatically detect and apply upstream dependency updates across Ethereum Rust ecosystem repos.
+## Overview
 
-## Dependency Graph
+Bump upstream Rust crate versions across Ethereum ecosystem repos, handling the cross-cutting dependency web and `[patch]` git overrides that break simple version bumps.
 
-Dependencies are cross-cutting, not linear:
+## When to Use
+
+- User asks to bump/update/upgrade alloy, revm, or related crates
+- User asks to check for outdated deps in reth, foundry, or similar projects
+- Upstream released a new version and downstream needs to adopt it
+
+## When NOT to Use
+
+- Non-Rust projects
+- Repos outside the alloy/revm ecosystem (use standard `cargo upgrade` instead)
+- The user only wants to update `Cargo.lock` without changing version constraints (`cargo update` is enough)
+
+## Dependency Matrix
+
+Dependencies are cross-cutting, not linear. You MUST understand this before bumping:
 
 ```
-            alloy-core (primitives, sol-types, rlp, dyn-abi)
+            alloy-core
            ╱    │     ╲
-        alloy   │    revm ←── uses alloy-core AND some alloy crates
+        alloy   │    revm ←── uses alloy-core AND alloy crates
            ╲    │     ╱
-          alloy-evm (bridges alloy + revm)
+          alloy-evm (bridge)
            ╱       ╲
         reth      foundry
 ```
-
-Who depends on what:
 
 | Project | alloy-core | alloy | revm | alloy-evm |
 |---------|-----------|-------|------|-----------|
@@ -31,163 +43,137 @@ Who depends on what:
 | reth | ✓ | ✓ | ✓ | ✓ |
 | foundry | ✓ | ✓ | ✓ | ✓ |
 
-**Key**: revm directly uses alloy crates (consensus, eips, provider), not just alloy-core. This means an alloy major bump can break revm too. Always check the full matrix before bumping.
+An alloy major bump can break revm. A revm major bump requires alloy-evm update first.
 
-## Step 0: Understand the Target Repo's Dep Structure
+## Crate Families
 
-Before anything, determine the dep management pattern:
+You MUST bump all crates within a family together:
+
+| Family | Sub-crates | Cross-deps |
+|--------|-----------|------------|
+| **alloy-core** | alloy-primitives, alloy-sol-types, alloy-dyn-abi, alloy-rlp | none (root) |
+| **alloy** | alloy-consensus, alloy-eips, alloy-network, alloy-provider, alloy-rpc-types, alloy-signer, alloy-transport, etc. | uses alloy-core |
+| **revm** | revm, revm-interpreter, revm-context, revm-handler, revm-inspector, revm-precompile, etc. | uses alloy-core + alloy (consensus, eips, provider) |
+| **alloy-evm** | alloy-evm | uses alloy + revm (bridge layer) |
+| **op-alloy** | op-alloy-consensus, op-alloy-rpc-types, op-revm, etc. | uses alloy + revm |
+
+## Execution Flow
+
+```dot
+digraph bump_flow {
+  "Start" [shape=doublecircle];
+  "Check workspace mode" [shape=box];
+  "Has [patch] overrides?" [shape=diamond];
+  "Pre-release version?" [shape=diamond];
+  "Check crates.io" [shape=box];
+  "Check GitHub releases" [shape=box];
+  "Read changelog" [shape=box];
+  "Is major bump?" [shape=diamond];
+  "Bump version in root Cargo.toml" [shape=box];
+  "Reset Cargo.lock first" [shape=box];
+  "Update [patch] rev/branch" [shape=box];
+  "cargo check" [shape=box];
+  "Errors?" [shape=diamond];
+  "Fix breakage from changelog" [shape=box];
+  "Need coordinated bump?" [shape=diamond];
+  "Bump alloy-evm first" [shape=box];
+  "Done" [shape=doublecircle];
+
+  "Start" -> "Check workspace mode";
+  "Check workspace mode" -> "Has [patch] overrides?";
+  "Has [patch] overrides?" -> "Pre-release version?" [label="no"];
+  "Has [patch] overrides?" -> "Pre-release version?" [label="yes — note them"];
+  "Pre-release version?" -> "Check GitHub releases" [label="yes (rc/beta)"];
+  "Pre-release version?" -> "Check crates.io" [label="no"];
+  "Check crates.io" -> "Read changelog";
+  "Check GitHub releases" -> "Read changelog";
+  "Read changelog" -> "Is major bump?";
+  "Is major bump?" -> "Need coordinated bump?" [label="yes"];
+  "Is major bump?" -> "Reset Cargo.lock first" [label="no (patch/minor)"];
+  "Need coordinated bump?" -> "Bump alloy-evm first" [label="revm+alloy"];
+  "Need coordinated bump?" -> "Reset Cargo.lock first" [label="single family"];
+  "Bump alloy-evm first" -> "Reset Cargo.lock first";
+  "Reset Cargo.lock first" -> "Bump version in root Cargo.toml";
+  "Bump version in root Cargo.toml" -> "Update [patch] rev/branch" [label="if patches exist"];
+  "Bump version in root Cargo.toml" -> "cargo check" [label="no patches"];
+  "Update [patch] rev/branch" -> "cargo check";
+  "cargo check" -> "Errors?" ;
+  "Errors?" -> "Done" [label="no"];
+  "Errors?" -> "Fix breakage from changelog" [label="yes"];
+  "Fix breakage from changelog" -> "cargo check";
+}
+```
+
+## Step-by-Step
+
+### 1. Detect workspace mode (ALWAYS do this first)
 
 ```bash
-# Check if workspace inheritance is used (most Ethereum repos do this)
 grep -c 'workspace = true' crates/*/Cargo.toml 2>/dev/null
-
-# If high count → only root Cargo.toml needs version changes
-# If zero → each member crate pins its own version, all need updating
 ```
+- High count → workspace inheritance, only change root `Cargo.toml`
+- Zero → each member crate pins its own version, update all of them
 
-**Foundry**: 215 workspace-inherited deps, only change root `Cargo.toml`
-**Reth**: Similar workspace pattern
-
-## Step 1: Check Versions
+### 2. Check for `[patch]` git overrides (CRITICAL)
 
 ```bash
-# Latest stable on crates.io
+grep -c 'git.*alloy\|git.*revm' Cargo.toml
+```
+If > 0: you CANNOT just change version numbers. The `[patch]` section overrides crates.io. You must update the git rev/branch too, AND the `[patch]` version must match `[dependencies]` exactly or it is **silently ignored**.
+
+### 3. Determine target version
+
+```bash
+# Stable
 cargo search alloy --limit 1
-cargo search revm --limit 1
 
-# Latest pre-release (check GitHub — crates.io doesn't show rc/beta)
+# Pre-release (crates.io doesn't show rc/beta)
 gh api repos/alloy-rs/alloy/releases --jq '.[0].tag_name'
-gh api repos/bluealloy/revm/releases --jq '.[0].tag_name'
-
-# Current version in target repo
-grep -E '^alloy.*version' Cargo.toml | head -5
-grep -E '^revm.*version' Cargo.toml | head -5
 ```
+If repo currently uses a pre-release (e.g. `2.0.0-rc.0`), track that channel.
 
-**Important**: If the repo uses pre-release versions (e.g. `2.0.0-rc.0`), track the pre-release channel, not the stable channel. Check GitHub releases, not just crates.io.
-
-## Step 2: Read the Changelog
+### 4. Read changelog BEFORE bumping
 
 ```bash
-# Get release notes for version diff
 gh api repos/alloy-rs/alloy/releases/latest --jq '.body' | head -50
-
-# For breaking changes, look for:
-# - "BREAKING" in release notes
-# - Major version bumps in sub-crates
-# - Renamed/removed types
-# - Changed trait bounds
-# - Feature flag renames
 ```
+Look for: BREAKING, renamed types, changed trait bounds, feature flag renames.
 
-## Step 3: Update Versions
-
-For workspace-inherited repos (most common):
+### 5. Reset Cargo.lock, then bump
 
 ```bash
-# Find all alloy dep lines in root Cargo.toml
-grep -n 'alloy.*version' Cargo.toml
+git checkout -- Cargo.lock
 ```
-
-**Caution with sed**: Cargo.toml has two dep formats:
+Then apply version changes. Use `sed 's/= "OLD"/= "NEW"/g'` — this catches both formats:
 ```toml
-alloy-dyn-abi = "1.5.2"                              # simple format
-alloy-primitives = { version = "1.5.2", features = [] }  # inline table
-```
-Use `sed 's/= "OLD"/= "NEW"/g'` (not `version = "OLD"`) to catch both formats.
-
-Update the version string for each group. The alloy crate families:
-
-| Family | Sub-crates | Version tracks | Cross-deps |
-|--------|-----------|---------------|------------|
-| **alloy-core** | alloy-primitives, alloy-sol-types, alloy-dyn-abi, alloy-rlp | alloy-core version | none (root) |
-| **alloy** | alloy-consensus, alloy-eips, alloy-network, alloy-provider, alloy-rpc-types, alloy-signer, alloy-transport, etc. | alloy main version | uses alloy-core |
-| **revm** | revm, revm-interpreter, revm-context, revm-handler, revm-inspector, revm-precompile, etc. | revm main version | uses alloy-core + alloy (consensus, eips, provider) |
-| **alloy-evm** | alloy-evm | alloy-evm version | uses alloy + revm (bridge layer) |
-| **op-alloy** | op-alloy-consensus, op-alloy-rpc-types, op-revm, etc. | op-alloy version | uses alloy + revm |
-
-## Step 4: Fix Breakage
-
-```bash
-# Run cargo check to find compile errors
-cargo check 2>&1 | head -100
-
-# Common fix patterns:
-# 1. Renamed types → grep old name, replace with new
-# 2. Removed re-exports → add direct dep on the sub-crate
-# 3. Changed trait bounds → update impl blocks
-# 4. Feature flag changes → check new Cargo.toml of upstream
-# 5. Method signature changes → read the diff/changelog
+alloy-dyn-abi = "1.5.2"                                # simple
+alloy-primitives = { version = "1.5.2", features = [] } # inline table
 ```
 
-For feature flag changes:
-```bash
-# Compare features between versions
-cargo info alloy-consensus  # shows available features
-# Cross-check with what the repo uses
-grep -A5 'alloy-consensus' Cargo.toml
-```
-
-## Step 5: Verify
+### 6. Verify
 
 ```bash
 cargo check
-cargo clippy --workspace 2>&1 | tail -20
-cargo test --workspace --no-fail-fast 2>&1 | tail -30
 ```
+If errors:
+- Read the error + the changelog you already fetched
+- Common fixes: renamed types (search-replace), removed re-exports (add direct dep), changed trait bounds (update impls), feature flag renames
 
-## Step 6: Coordinated Multi-Crate Bumps
-
-When alloy and revm need simultaneous bumps:
-
-1. Bump alloy first (more foundational)
-2. Then bump revm (may depend on new alloy types)
-3. `cargo check` after each to isolate breakage source
-4. If circular dependency issues, bump both at once
-
-## Step 7: Handle `[patch]` Git Overrides (Critical!)
-
-Many Ethereum repos (foundry, reth) use `[patch.crates-io]` to pin deps to git branches/commits instead of crates.io versions. **This is the #1 reason simple version bumps fail.**
-
-```bash
-# Check for patch overrides
-grep -c 'git.*alloy\|git.*revm' Cargo.toml
-# If > 0, you MUST update these too
-```
-
-Example from foundry:
-```toml
-[patch.crates-io]
-alloy-consensus = { git = "https://github.com/alloy-rs/alloy", rev = "100a332..." }
-alloy-evm = { git = "https://github.com/alloy-rs/evm.git", branch = "alloy-2.0" }
-```
-
-When bumping revm, you need to:
-1. Update the `[dependencies]` version
-2. Update the `[patch]` rev/branch to a commit that supports the new revm
-3. Ensure `alloy-evm` git branch is compatible with both new revm AND current alloy
-
-**This is the hard part that Dependabot/Renovate cannot do** — it requires understanding the cross-repo compatibility matrix.
-
-## Common Mistakes
-
-- **Stale `Cargo.lock`**: After a failed bump, `Cargo.lock` retains residual changes. Always `git checkout -- Cargo.lock` before retrying
-- **`[patch]` silent ignore**: If `[dependencies]` says `0.36.1` but `[patch]` pins `0.36.0`, the patch is **silently ignored**, pulling incompatible transitive deps from crates.io. Versions must match exactly
-- Bumping `alloy` but not `alloy-core` (or vice versa) when they released together
-- Not checking pre-release channel when repo uses `rc`/`beta` versions
-- Forgetting `cargo update -p <crate>` to sync `Cargo.lock`
-- Missing feature flag renames in new version
-- Not checking if `op-alloy` also needs bumping (for OP Stack repos)
-
-## Output
+### 7. Commit
 
 ```
-chore(deps): bump alloy from X to Y
+chore(deps): bump alloy-core from X to Y
 
-Updated alloy family deps across workspace:
-- alloy-consensus, alloy-eips, ... : X → Y
-- alloy-primitives: A → B (if changed)
-
-Breaking changes addressed:
-- [brief description]
+Updated: alloy-primitives, alloy-sol-types, alloy-dyn-abi, ...
+Changes: [brief summary from changelog]
 ```
+
+## Critical Pitfalls
+
+| Pitfall | What happens | Fix |
+|---------|-------------|-----|
+| Stale `Cargo.lock` | Previous failed bump pollutes next attempt | `git checkout -- Cargo.lock` before retrying |
+| `[patch]` version mismatch | Patch silently ignored, crates.io version used, incompatible transitive deps pulled in | Ensure `[dependencies]` and `[patch]` versions match exactly |
+| Bump one family, miss another | e.g. bump alloy but not alloy-core when they released together | Check all families in the matrix |
+| Ignore pre-release channel | `cargo search` shows stable 1.7.3 but repo uses 2.0.0-rc.0 | Use `gh api` for GitHub releases |
+| Major revm bump without alloy-evm | alloy-evm bridges alloy+revm, must be compatible with both | Bump alloy-evm first or simultaneously |
