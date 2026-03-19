@@ -132,6 +132,30 @@ When alloy and revm need simultaneous bumps:
 3. `cargo check` after each to isolate breakage source
 4. If circular dependency issues, bump both at once
 
+## Step 7: Handle `[patch]` Git Overrides (Critical!)
+
+Many Ethereum repos (foundry, reth) use `[patch.crates-io]` to pin deps to git branches/commits instead of crates.io versions. **This is the #1 reason simple version bumps fail.**
+
+```bash
+# Check for patch overrides
+grep -c 'git.*alloy\|git.*revm' Cargo.toml
+# If > 0, you MUST update these too
+```
+
+Example from foundry:
+```toml
+[patch.crates-io]
+alloy-consensus = { git = "https://github.com/alloy-rs/alloy", rev = "100a332..." }
+alloy-evm = { git = "https://github.com/alloy-rs/evm.git", branch = "alloy-2.0" }
+```
+
+When bumping revm, you need to:
+1. Update the `[dependencies]` version
+2. Update the `[patch]` rev/branch to a commit that supports the new revm
+3. Ensure `alloy-evm` git branch is compatible with both new revm AND current alloy
+
+**This is the hard part that Dependabot/Renovate cannot do** — it requires understanding the cross-repo compatibility matrix.
+
 ## Common Mistakes
 
 - Bumping `alloy` but not `alloy-core` (or vice versa) when they released together
