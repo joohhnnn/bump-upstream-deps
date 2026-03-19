@@ -1,249 +1,202 @@
 ---
 name: bump-upstream-deps
-description: Use when asked to bump, update, or upgrade alloy, revm, alloy-core, or alloy-evm in an Ethereum Rust repo (reth, foundry). Also use when checking for outdated Cargo dependencies in these projects.
+description: Use when asked to bump, update, or upgrade alloy, revm, alloy-core, or alloy-evm in an Ethereum Rust repo (reth, foundry); also when checking for outdated Cargo dependencies in these projects
 ---
 
 # Bump Upstream Dependencies
 
 ## Overview
 
-Bump upstream Rust crate versions across Ethereum ecosystem repos, handling the cross-cutting dependency web and `[patch]` git overrides that break simple version bumps.
+Bump upstream Rust crate versions across Ethereum ecosystem repos (reth, foundry), handling cross-cutting dependencies and `[patch]` git overrides.
 
-## When to Use
+**Core principle:** A bump is NOT done when `cargo check` passes. It is done when redundant local code is removed and `cargo fmt + clippy` is clean.
 
-- User asks to bump/update/upgrade alloy, revm, or related crates
-- User asks to check for outdated deps in reth, foundry, or similar projects
-- Upstream released a new version and downstream needs to adopt it
+## The Completion Gate
 
-## When NOT to Use
+```
+BEFORE claiming the bump is complete, you MUST have evidence of ALL:
 
-- Non-Rust projects
-- Repos outside the alloy/revm ecosystem (use standard `cargo upgrade` instead)
-- The user only wants to update `Cargo.lock` without changing version constraints (`cargo update` is enough)
+1. ✅ cargo check --workspace --all-features passes
+2. ✅ Upstream public API cross-referenced against local code (Step 7 output)
+3. ✅ Redundant local code removed or justified
+4. ✅ cargo +nightly fmt --all produces no changes
+5. ✅ cargo +nightly clippy --workspace --all-features is clean
+
+Missing ANY of these = bump is NOT complete. Do NOT commit.
+```
+
+## Red Flags — STOP and Go Back
+
+- `cargo check` passed and you're about to commit → **STOP. Step 7 is not done.**
+- You skipped the upstream API cross-reference → **STOP. Run it now.**
+- You found matching names but decided "it's probably different" → **STOP. Read both implementations.**
+- You're about to say "Done" without `cargo fmt` output → **STOP. Run it.**
+
+## Rationalization Prevention
+
+| Excuse | Reality |
+|--------|---------|
+| "cargo check passes, we're done" | Compilation ≠ completion. Redundant local code is tech debt. Step 7 is mandatory. |
+| "The cross-reference didn't find anything" | Show the output. If you didn't run it, run it now. |
+| "Same name but different implementation" | Read both. If upstream's version works, delete local. |
+| "Removing code is risky" | Keeping redundant code is riskier — it diverges silently from upstream. |
+| "I'll clean up in a follow-up" | No. Clean bump = one PR. Upstream maintainers do it in one commit. |
+| "The upstream API check is slow" | It reads files already on disk. It takes seconds. |
 
 ## Dependency Matrix
-
-Dependencies are cross-cutting, not linear. You MUST understand this before bumping:
 
 ```
             alloy-core
            ╱    │     ╲
-        alloy   │    revm ←── uses alloy-core AND alloy crates
+        alloy   │    revm
            ╲    │     ╱
           alloy-evm (bridge)
            ╱       ╲
         reth      foundry
 ```
 
-| Project | alloy-core | alloy | revm | alloy-evm |
-|---------|-----------|-------|------|-----------|
-| alloy | ✓ | — | ✗ | ✗ |
-| revm | ✓ | ✓ partial | — | ✗ |
-| alloy-evm | ✓ | ✓ | ✓ | — |
-| reth | ✓ | ✓ | ✓ | ✓ |
-| foundry | ✓ | ✓ | ✓ | ✓ |
-
-An alloy major bump can break revm. A revm major bump requires alloy-evm update first.
-
-## Crate Families
-
 You MUST bump all crates within a family together:
 
-| Family | Sub-crates | Cross-deps |
-|--------|-----------|------------|
-| **alloy-core** | alloy-primitives, alloy-sol-types, alloy-dyn-abi, alloy-rlp | none (root) |
-| **alloy** | alloy-consensus, alloy-eips, alloy-network, alloy-provider, alloy-rpc-types, alloy-signer, alloy-transport, etc. | uses alloy-core |
-| **revm** | revm, revm-interpreter, revm-context, revm-handler, revm-inspector, revm-precompile, etc. | uses alloy-core + alloy (consensus, eips, provider) |
-| **alloy-evm** | alloy-evm | uses alloy + revm (bridge layer) |
-| **op-alloy** | op-alloy-consensus, op-alloy-rpc-types, op-revm, etc. | uses alloy + revm |
+| Family | Sub-crates |
+|--------|-----------|
+| **alloy-core** | alloy-primitives, alloy-sol-types, alloy-dyn-abi, alloy-rlp |
+| **alloy** | alloy-consensus, alloy-eips, alloy-network, alloy-provider, alloy-rpc-types, alloy-signer, alloy-transport, etc. |
+| **revm** | revm, revm-interpreter, revm-context, revm-handler, revm-inspector, revm-precompile, etc. |
+| **alloy-evm** | alloy-evm |
+| **op-alloy** | op-alloy-consensus, op-alloy-rpc-types, op-revm, etc. |
+
+A major revm bump requires alloy-evm update first or simultaneously.
 
 ## Execution Flow
 
 ```dot
 digraph bump_flow {
   "Start" [shape=doublecircle];
-  "Check workspace mode" [shape=box];
-  "Has [patch] overrides?" [shape=diamond];
-  "Pre-release version?" [shape=diamond];
-  "Check crates.io" [shape=box];
-  "Check GitHub releases" [shape=box];
-  "Read changelog" [shape=box];
-  "Is major bump?" [shape=diamond];
-  "Bump version in root Cargo.toml" [shape=box];
-  "Bump Cargo.toml + cargo update -p" [shape=box];
-  "Update [patch] rev/branch" [shape=box];
-  "cargo check" [shape=box];
+  "1. Workspace mode + [patch] check" [shape=box];
+  "2. Determine version + read changelog" [shape=box];
+  "3. Bump Cargo.toml + cargo update -p" [shape=box];
+  "4. cargo check" [shape=box];
   "Errors?" [shape=diamond];
-  "Fix breakage from changelog" [shape=box];
-  "Need coordinated bump?" [shape=diamond];
-  "Bump alloy-evm first" [shape=box];
+  "Fix from changelog" [shape=box];
+  "5. Cross-reference upstream API (MANDATORY)" [shape=box, style=bold];
+  "6. Remove redundant code + clean deps" [shape=box, style=bold];
+  "7. cargo fmt + clippy" [shape=box];
+  "All 5 gate checks pass?" [shape=diamond];
   "Done" [shape=doublecircle];
 
-  "Start" -> "Check workspace mode";
-  "Check workspace mode" -> "Has [patch] overrides?";
-  "Has [patch] overrides?" -> "Pre-release version?" [label="no"];
-  "Has [patch] overrides?" -> "Pre-release version?" [label="yes — note them"];
-  "Pre-release version?" -> "Check GitHub releases" [label="yes (rc/beta)"];
-  "Pre-release version?" -> "Check crates.io" [label="no"];
-  "Check crates.io" -> "Read changelog";
-  "Check GitHub releases" -> "Read changelog";
-  "Read changelog" -> "Is major bump?";
-  "Is major bump?" -> "Need coordinated bump?" [label="yes"];
-  "Is major bump?" -> "Bump Cargo.toml + cargo update -p" [label="no (patch/minor)"];
-  "Need coordinated bump?" -> "Bump alloy-evm first" [label="revm+alloy"];
-  "Need coordinated bump?" -> "Bump Cargo.toml + cargo update -p" [label="single family"];
-  "Bump alloy-evm first" -> "Bump Cargo.toml + cargo update -p";
-  "Bump Cargo.toml + cargo update -p" -> "Bump version in root Cargo.toml";
-  "Bump version in root Cargo.toml" -> "Update [patch] rev/branch" [label="if patches exist"];
-  "Bump version in root Cargo.toml" -> "cargo check" [label="no patches"];
-  "Update [patch] rev/branch" -> "cargo check";
-  "Replace redundant local code" [shape=box];
-  "Clean up unused deps" [shape=box];
-  "cargo fmt + clippy" [shape=box];
-
-  "cargo check" -> "Errors?" ;
-  "Errors?" -> "Replace redundant local code" [label="no"];
-  "Errors?" -> "Fix breakage from changelog" [label="yes"];
-  "Fix breakage from changelog" -> "cargo check";
-  "Replace redundant local code" -> "Clean up unused deps";
-  "Clean up unused deps" -> "cargo fmt + clippy";
-  "cargo fmt + clippy" -> "Done";
+  "Start" -> "1. Workspace mode + [patch] check";
+  "1. Workspace mode + [patch] check" -> "2. Determine version + read changelog";
+  "2. Determine version + read changelog" -> "3. Bump Cargo.toml + cargo update -p";
+  "3. Bump Cargo.toml + cargo update -p" -> "4. cargo check";
+  "4. cargo check" -> "Errors?";
+  "Errors?" -> "Fix from changelog" [label="yes"];
+  "Fix from changelog" -> "4. cargo check";
+  "Errors?" -> "5. Cross-reference upstream API (MANDATORY)" [label="no"];
+  "5. Cross-reference upstream API (MANDATORY)" -> "6. Remove redundant code + clean deps";
+  "6. Remove redundant code + clean deps" -> "7. cargo fmt + clippy";
+  "7. cargo fmt + clippy" -> "All 5 gate checks pass?";
+  "All 5 gate checks pass?" -> "Done" [label="yes"];
+  "All 5 gate checks pass?" -> "5. Cross-reference upstream API (MANDATORY)" [label="no — go back"];
 }
 ```
 
 ## Step-by-Step
 
-### 1. Detect workspace mode (ALWAYS do this first)
+### 1. Detect workspace mode and [patch] overrides
 
 ```bash
 grep -c 'workspace = true' crates/*/Cargo.toml 2>/dev/null
-```
-- High count → workspace inheritance, only change root `Cargo.toml`
-- Zero → each member crate pins its own version, update all of them
-
-### 2. Check for `[patch]` git overrides (CRITICAL)
-
-```bash
 grep -c 'git.*alloy\|git.*revm' Cargo.toml
 ```
-If > 0: you CANNOT just change version numbers. The `[patch]` section overrides crates.io. You must update the git rev/branch too, AND the `[patch]` version must match `[dependencies]` exactly or it is **silently ignored**.
+- High workspace count → only change root `Cargo.toml`
+- Active `[patch]` overrides → must update git rev/branch AND version must match exactly (silently ignored otherwise)
 
-### 3. Determine target version
-
-```bash
-# Stable
-cargo search alloy --limit 1
-
-# Pre-release (crates.io doesn't show rc/beta)
-gh api repos/alloy-rs/alloy/releases --jq '.[0].tag_name'
-```
-If repo currently uses a pre-release (e.g. `2.0.0-rc.0`), track that channel.
-
-### 4. Read changelog BEFORE bumping
+### 2. Determine target version and read changelog
 
 ```bash
-gh api repos/alloy-rs/alloy/releases/latest --jq '.body' | head -50
+cargo search alloy-evm --limit 1          # stable
+gh api repos/alloy-rs/alloy/releases --jq '.[0].tag_name'  # pre-release
+gh api repos/alloy-rs/evm/releases/latest --jq '.body' | head -50  # changelog
 ```
-Look for: BREAKING, renamed types, changed trait bounds, feature flag renames.
+Look for: BREAKING, renamed types, changed trait bounds, feature flag renames, **new exports**.
 
-### 5. Bump versions and update lockfile
+### 3. Bump versions and update lockfile
 
-First apply version changes in `Cargo.toml`. Use `sed 's/= "OLD"/= "NEW"/g'` — this catches both formats:
-```toml
-alloy-dyn-abi = "1.5.2"                                # simple
-alloy-primitives = { version = "1.5.2", features = [] } # inline table
-```
-
-Then update `Cargo.lock` precisely — do NOT `git checkout -- Cargo.lock`, that resets all transitive deps and introduces unrelated changes (windows-sys, syn, socket2, etc.):
-
+Edit `Cargo.toml`, then update `Cargo.lock` precisely:
 ```bash
-# For alloy-core bump
-cargo update -p alloy-primitives -p alloy-sol-types -p alloy-dyn-abi -p alloy-json-abi
-
-# For revm bump
 cargo update -p revm -p revm-database -p revm-interpreter -p revm-database-interface -p revm-inspectors -p alloy-evm
-
-# For alloy bump
-cargo update -p alloy-consensus -p alloy-eips -p alloy-network -p alloy-provider -p alloy-rpc-types
 ```
 
-Only use `git checkout -- Cargo.lock` if a previous failed bump left the lockfile in a dirty state.
+**NEVER** `git checkout -- Cargo.lock` — that resets all transitive deps and introduces unrelated changes.
 
-### 6. Verify
+### 4. Fix compilation errors
 
 ```bash
 cargo check --workspace --all-features
 ```
-If errors:
-- Read the error + the changelog you already fetched
-- Common fixes: renamed types (search-replace), removed re-exports (add direct dep), changed trait bounds (update impls), feature flag renames
+Common fixes: renamed types (search-replace), changed trait bounds (update impls), removed re-exports (add direct dep).
 
-### 7. Replace redundant local code with upstream exports (IMPORTANT)
+### 5. Cross-reference upstream API against local code (MANDATORY)
 
-After compilation passes, do NOT stop. The new upstream version likely exports types, traits, or helpers that the local codebase was implementing manually. Removing this redundant code is a key part of a clean bump.
+**This step is NOT optional. Do NOT skip it. Do NOT commit without completing it.**
 
-**7a. Inspect the upstream crate's public API for new exports:**
 ```bash
-# Find the upstream source directory from cargo metadata
+# Locate the upstream crate's source (already on disk from cargo)
 upstream_dir=$(cargo metadata --format-version 1 --no-deps 2>/dev/null | \
-  python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print([p['manifest_path'] for p in pkgs if p['name']=='alloy-evm'][0])" | \
+  python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print([p['manifest_path'] for p in pkgs if p['name']=='TARGET_CRATE'][0])" | \
   xargs dirname)
 
-# Read its lib.rs to see public exports (pub struct, pub trait, pub fn, pub use)
-grep -n 'pub ' "$upstream_dir/src/lib.rs" | head -40
-
-# Or list all pub items across the crate
-grep -rn 'pub \(struct\|trait\|fn\|type\|use\) ' "$upstream_dir/src/" | head -50
-```
-
-**7b. Cross-reference with local implementations:**
-```bash
-# Extract upstream pub type/struct/trait names
+# Extract all public type/struct/trait/fn names from upstream
 upstream_names=$(grep -roh 'pub \(struct\|trait\|fn\) \w\+' "$upstream_dir/src/" | awk '{print $3}' | sort -u)
 
-# Search for local code with the same names (potential redundancy)
+# Cross-reference: find local code with the same names
 for name in $upstream_names; do
   matches=$(grep -rn "struct $name\|trait $name\|fn $name" crates/ --include='*.rs' -l 2>/dev/null)
-  if [ -n "$matches" ]; then
-    echo "  $name -> $matches"
-  fi
+  [ -n "$matches" ] && echo "  $name -> $matches"
 done
 ```
 
-Look for:
-- Local structs/traits that now exist upstream (e.g. `MockExecutor`, `NoopBlockExecutor`)
-- Local helper functions that upstream now provides
-- Wrapper types no longer needed because upstream changed the API
-- `// TODO: remove when upstream exports this` comments
+For each match:
+1. Read the upstream implementation
+2. Read the local implementation
+3. If upstream provides equivalent functionality → **delete local, use upstream import**
+4. If genuinely different → keep, but document why
 
-**7c. Remove redundant code and switch to upstream imports.** After removing code, also clean up:
-- Member crate `Cargo.toml` files: remove dependencies that are no longer used
-- Re-exports that pointed to now-removed local types
+### 6. Clean up after removing code
 
-### 8. Format and final check
+- Remove unused dependencies from member crate `Cargo.toml` files
+- Remove dead re-exports
+- Remove orphaned test helpers
+
+### 7. Format and lint
 
 ```bash
 cargo +nightly fmt --all
 cargo +nightly clippy --workspace --all-features
 ```
 
+### 8. Verify the Completion Gate
+
+Before committing, confirm ALL five checks pass. If any fails, go back to the relevant step.
+
 ### 9. Commit
 
 ```
-chore(deps): bump alloy-core from X to Y
+chore(deps): bump <family> from X to Y
 
-Updated: alloy-primitives, alloy-sol-types, alloy-dyn-abi, ...
-Changes: [brief summary from changelog]
+Updated: <list of bumped crates>
+Breaking changes: <brief summary>
+Removed: <redundant local code replaced by upstream>
 ```
 
 ## Critical Pitfalls
 
 | Pitfall | What happens | Fix |
 |---------|-------------|-----|
-| Blanket `Cargo.lock` reset | `git checkout -- Cargo.lock` re-resolves ALL transitive deps, introducing unrelated changes | Use `cargo update -p <crate>` to update only target crates. Only reset Cargo.lock if a previous failed bump polluted it |
-| `[patch]` version mismatch | Patch silently ignored, crates.io version used, incompatible transitive deps pulled in | Ensure `[dependencies]` and `[patch]` versions match exactly |
-| Bump one family, miss another | e.g. bump alloy but not alloy-core when they released together | Check all families in the matrix |
-| Ignore pre-release channel | `cargo search` shows stable 1.7.3 but repo uses 2.0.0-rc.0 | Use `gh api` for GitHub releases |
-| Major revm bump without alloy-evm | alloy-evm bridges alloy+revm, must be compatible with both | Bump alloy-evm first or simultaneously |
-| Stop after compilation passes | Local code that reimplements upstream functionality remains as dead weight | After `cargo check` passes, compare upstream's new exports against local implementations and remove redundant code |
-| Skip rustfmt | Trait bound changes and new imports cause formatting drift | Always run `cargo +nightly fmt --all` before committing |
+| Blanket `Cargo.lock` reset | Introduces unrelated transitive dep changes | Use `cargo update -p <crate>` only |
+| `[patch]` version mismatch | Patch silently ignored, incompatible deps | Ensure `[dependencies]` and `[patch]` versions match exactly |
+| Bump one family, miss another | e.g. bump alloy but not alloy-core | Check all families in the matrix |
+| Ignore pre-release channel | `cargo search` shows stable but repo uses rc | Use `gh api` for GitHub releases |
+| Major revm bump without alloy-evm | Incompatible bridge layer | Bump alloy-evm first or simultaneously |
+| **Stop after cargo check passes** | **Redundant local code remains as tech debt** | **Step 5 is mandatory — cross-reference upstream API** |
+| Skip rustfmt | Formatting drift from trait bound changes | Always `cargo +nightly fmt --all` before commit |
