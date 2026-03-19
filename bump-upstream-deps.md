@@ -11,15 +11,19 @@ Automatically detect and apply upstream dependency updates across Ethereum Rust 
 
 ```
 alloy-core (alloy-primitives, alloy-sol-types, alloy-rlp, alloy-dyn-abi)
-alloy      (alloy-consensus, alloy-eips, alloy-provider, alloy-rpc-types, ~30 sub-crates)
+  │
+alloy (alloy-consensus, alloy-eips, alloy-provider, alloy-rpc-types, ~30 sub-crates)
+  │
+revm ←── depends on alloy-core + some alloy crates
+  │
+alloy-evm ←── BRIDGES alloy + revm (critical middle layer)
+  │
   ├── reth (paradigmxyz/reth)
   ├── foundry (foundry-rs/foundry)
-  └── revm (alloy-evm, revm-context, revm-interpreter, ~10 sub-crates)
-        ├── reth
-        └── foundry
+  └── op-alloy / op-revm (OP Stack extensions)
 ```
 
-**Key**: alloy and revm often need coordinated bumps due to shared types.
+**Key**: `alloy-evm` bridges alloy and revm. When either side bumps a major version, `alloy-evm` must update first, then downstream repos follow.
 
 ## Step 0: Understand the Target Repo's Dep Structure
 
