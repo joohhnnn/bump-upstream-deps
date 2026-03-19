@@ -73,14 +73,16 @@ gh api repos/alloy-rs/alloy/releases/latest --jq '.body' | head -50
 For workspace-inherited repos (most common):
 
 ```bash
-# Update ALL alloy sub-crates in root Cargo.toml at once
-# They should all use the same version within a family:
-#   alloy-consensus, alloy-eips, alloy-network, etc. → same version
-#   alloy-primitives, alloy-sol-types → may have different version (alloy-core family)
-
 # Find all alloy dep lines in root Cargo.toml
 grep -n 'alloy.*version' Cargo.toml
 ```
+
+**Caution with sed**: Cargo.toml has two dep formats:
+```toml
+alloy-dyn-abi = "1.5.2"                              # simple format
+alloy-primitives = { version = "1.5.2", features = [] }  # inline table
+```
+Use `sed 's/= "OLD"/= "NEW"/g'` (not `version = "OLD"`) to catch both formats.
 
 Update the version string for each group. The alloy crate families:
 
