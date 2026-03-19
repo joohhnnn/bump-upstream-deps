@@ -76,19 +76,12 @@ Divergent (3):
 
 The 3-file gap is a design judgment, not a capability gap. Human chose aggressive simplification; AI chose conservative correctness. Both compile and pass tests.
 
-### Test 3: foundry
-
-| Bump | Result |
-|------|--------|
-| alloy-core 1.5.2 → 1.5.7 | ✅ |
-| revm 34 → 36 | ❌ needs coordinated alloy-evm + `[patch]` update |
-
 ## Lessons Learned
 
-1. **Skill file placement**: `~/.claude/skills/foo.md` does NOT work. Must be `foo/SKILL.md`. We iterated 6 rounds before discovering the skill was never loaded.
-2. **`cargo update -p`**: Don't reset `Cargo.lock` — use precise per-crate updates.
-3. **TodoWrite as tracker**: Inspired by [obra/superpowers](https://github.com/obra/superpowers) — checklist items AI must complete one by one.
-4. **Compilation fixes are reliable, proactive cleanup is hard**: AI fixes everything `cargo check` catches. Simplifying code that already compiles needs explicit audit steps with concrete examples.
+- Skill files must be `<name>/SKILL.md`, not `<name>.md` — we iterated 6 rounds before finding this.
+- `cargo update -p <crate>` instead of resetting `Cargo.lock` avoids unrelated transitive dep noise.
+- TodoWrite checklists (inspired by [obra/superpowers](https://github.com/obra/superpowers)) turn skill steps into trackable tasks.
+- AI reliably fixes compilation errors; simplifying code that already compiles needs concrete examples in the skill.
 
 ## License
 
