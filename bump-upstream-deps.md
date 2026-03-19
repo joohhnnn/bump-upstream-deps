@@ -98,12 +98,13 @@ Use `sed 's/= "OLD"/= "NEW"/g'` (not `version = "OLD"`) to catch both formats.
 
 Update the version string for each group. The alloy crate families:
 
-| Family | Sub-crates | Version tracks |
-|--------|-----------|---------------|
-| **alloy** | alloy-consensus, alloy-eips, alloy-network, alloy-provider, alloy-rpc-types, alloy-signer, alloy-transport, etc. | alloy main version |
-| **alloy-core** | alloy-primitives, alloy-sol-types, alloy-dyn-abi, alloy-rlp | alloy-core version (may differ) |
-| **revm** | revm, revm-interpreter, revm-context, revm-handler, revm-inspector, revm-precompile, etc. | revm main version |
-| **op-alloy** | op-alloy-consensus, op-alloy-rpc-types, etc. | op-alloy version |
+| Family | Sub-crates | Version tracks | Cross-deps |
+|--------|-----------|---------------|------------|
+| **alloy-core** | alloy-primitives, alloy-sol-types, alloy-dyn-abi, alloy-rlp | alloy-core version | none (root) |
+| **alloy** | alloy-consensus, alloy-eips, alloy-network, alloy-provider, alloy-rpc-types, alloy-signer, alloy-transport, etc. | alloy main version | uses alloy-core |
+| **revm** | revm, revm-interpreter, revm-context, revm-handler, revm-inspector, revm-precompile, etc. | revm main version | uses alloy-core + alloy (consensus, eips, provider) |
+| **alloy-evm** | alloy-evm | alloy-evm version | uses alloy + revm (bridge layer) |
+| **op-alloy** | op-alloy-consensus, op-alloy-rpc-types, op-revm, etc. | op-alloy version | uses alloy + revm |
 
 ## Step 4: Fix Breakage
 
